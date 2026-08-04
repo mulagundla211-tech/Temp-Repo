@@ -1,0 +1,490 @@
+@using OnlineExamPlatform.Web.Models.ViewModels
+@{
+    ViewData["Title"] = "Take Exam";
+    Layout = null;
+    var exam = (TakeExamViewModel)ViewBag.Exam;
+    var attempt = (ExamAttempt)ViewBag.Attempt;
+    var questions = (List<TakeExamQuestion>)ViewBag.Questions;
+
+    var existingAnswersDict = new Dictionary<string, string>();
+    var markedForReviewDict = new Dictionary<string, bool>();
+    if (attempt.StudentAnswers != null)
+    {
+        foreach (var sa in attempt.StudentAnswers)
+        {
+            var val = sa.SelectedOptionId?.ToString() ?? sa.AnswerText ?? "";
+            existingAnswersDict[sa.QuestionId.ToString()] = val;
+            if (sa.MarkedForReview)
+            {
+                markedForReviewDict[sa.QuestionId.ToString()] = true;
+            }
+        }
+    }
+    var existingAnswersJson = System.Text.Json.JsonSerializer.Serialize(existingAnswersDict);
+    var markedForReviewJson = System.Text.Json.JsonSerializer.Serialize(markedForReviewDict);
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@exam.Title - Online Exam</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" />
+    <style>
+        body { margin: 0; overflow: hidden; }
+        .exam-container { height: 100vh; display: flex; flex-direction: column; }
+        .exam-header { background: #2c3590; color: white; padding: 0 20px; height: 64px; display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+        .exam-header-logo { display: flex; align-items: center; gap: 10px; min-width: 160px; flex-shrink: 0; padding-right: 18px; }
+        .exam-header-logo img { height: 40px; object-fit: contain; }
+        .exam-header-logo span { font-size: 13px; font-weight: 700; line-height: 1.3; opacity: 0.95; }
+        .exam-header-center { flex: 1; text-align: center; overflow: hidden; }
+        .exam-header-center h4 { margin: 0; font-size: 16px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .exam-header-center small { font-size: 11.5px; opacity: 0.8; }
+        .exam-header-right { display: flex; align-items: center; gap: 16px; min-width: 200px; justify-content: flex-end; flex-shrink: 0; border-left: 1px solid rgba(255,255,255,0.2); padding-left: 18px; }
+        .exam-header-student { text-align: right; line-height: 1.3; }
+        .exam-header-student .s-name { font-size: 13px; font-weight: 700; }
+        .exam-header-student .s-label { font-size: 10.5px; opacity: 0.75; }
+        .timer-display { font-size: 26px; font-weight: 800; font-family: monospace; letter-spacing: 1px; }
+        .timer-wrap { text-align: center; line-height: 1.2; }
+        .exam-body { display: flex; flex: 1; overflow: hidden; }
+        .question-sidebar { width: 200px; background: #f8f9fa; border-right: 1px solid #dee2e6; padding: 10px; overflow-y: auto; flex-shrink: 0; }
+        .nav-btn-item { border-radius: 5px; font-size: 11px; font-weight: 700; padding: 0; min-height: 34px; line-height: 1; display: inline-flex !important; align-items: center; justify-content: center; transition: transform 0.1s, box-shadow 0.15s; cursor: pointer; width: 100%; }
+        .nav-btn-item:hover { transform: scale(1.1); z-index: 1; position: relative; }
+        .nav-btn-item.btn-primary { background: #1a6fef; border-color: #1a6fef; color: #fff; box-shadow: 0 0 0 3px rgba(13,110,253,0.35); }
+        .nav-btn-item.btn-success { background: #198754; border-color: #198754; color: #fff; }
+        .nav-btn-item.btn-warning { background: #e67e00; border-color: #e67e00; color: #fff; }
+        .nav-btn-item.btn-outline-secondary { background: #fff; border-color: #ced4da; color: #6c757d; }
+        /* Beats the `display: inline-flex !important` above so subject-filtered buttons
+           actually hide (an inline style:none cannot override an !important rule). */
+        .nav-btn-item.nav-hidden { display: none !important; }
+        .sidebar-legend { margin-top: 12px; border-top: 1px solid #dee2e6; padding-top: 8px; }
+        .legend-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #555; margin-bottom: 4px; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; display: inline-block; }
+        /* ── Review button states ── */
+        .btn-review { background-color: #e67e00; border-color: #e67e00; color: #fff; }
+        .btn-review:hover, .btn-review:focus { background-color: #c96f00; border-color: #c96f00; color: #fff; }
+        .btn-review-outline { background-color: #fff; border-color: #e67e00; color: #e67e00; }
+        .btn-review-outline:hover, .btn-review-outline:focus { background-color: #fff5eb; border-color: #c96f00; color: #c96f00; }
+        .question-panel { display: none; }
+        .question-panel.active { display: block; }
+        .question-content { flex: 1; padding: 30px; overflow-y: auto; }
+        /* ── Footer ── */
+        .exam-footer { background: #fff; padding: 12px 20px; border-top: 2px solid #e9ecef; }
+        .btn-footer { font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 7px; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; transition: filter 0.15s, box-shadow 0.15s; border-width: 1.5px; }
+        .btn-footer:hover { filter: brightness(0.93); }
+        .btn-footer-nav { background: #fff; border: 1.5px solid #ced4da; color: #6c757d; font-size: 12px; font-weight: 600; padding: 7px 13px; border-radius: 7px; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+        .btn-footer-nav:hover { background: #f0f2f5; border-color: #adb5bd; color: #495057; }
+        .btn-footer-submit { background: #dc3545; border: 1.5px solid #dc3545; color: #fff; font-size: 13px; font-weight: 700; padding: 8px 20px; border-radius: 7px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; letter-spacing: 0.3px; }
+        .btn-footer-submit:hover { background: #bb2d3b; border-color: #bb2d3b; color: #fff; }
+        /* Question layout */
+        .question-meta { background: #eef1fb; border: 1.5px solid #d0d8f0; border-bottom: none; border-radius: 8px 8px 0 0; padding: 10px 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .question-meta .q-num { font-size: 14px; font-weight: 700; color: #2c3590; margin-right: 4px; }
+        .question-body { background: #fff; border: 1.5px solid #d0d8f0; border-top: none; border-radius: 0 0 8px 8px; padding: 18px 20px 14px; margin-bottom: 20px; font-size: 1rem; line-height: 1.75; color: #222; }
+        .option-item { padding: 12px 16px; margin-bottom: 8px; border: 1.5px solid #dee2e6; border-radius: 8px; cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+        .option-item:hover { background: #e7f1ff; border-color: #0d6efd; }
+        #exam-summary-modal { z-index: 1050; }
+        #modal-backdrop { z-index: 1040; }
+        .modal-dialog { max-width: 900px; }
+        .table-bordered th { background-color: #f8f9fa; font-weight: 600; color: #333; padding: 15px 10px; }
+        .table-bordered td { padding: 12px 10px; font-weight: 500; }
+        @@keyframes timerFlash {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; color: #ff0000; }
+        }
+    </style>
+</head>
+<body>
+<div class="exam-container">
+    <div class="exam-header">
+        <!-- Left: Logo -->
+        <div class="exam-header-logo">
+            <img src="/images/TopScoreLogo.png" alt="TopScore" />
+        </div>
+
+        <!-- Center: Exam info -->
+        <div class="exam-header-center">
+            <h4>@exam.Title</h4>
+            <small>
+                <i class="bi bi-question-circle me-1"></i>@questions.Count Questions
+                &nbsp;|&nbsp;
+                <i class="bi bi-award me-1"></i>@exam.TotalMarks Marks
+                @if (!string.IsNullOrEmpty(exam.Subjects))
+                {
+                    <text>&nbsp;|&nbsp;<i class="bi bi-book me-1"></i>@exam.Subjects</text>
+                }
+            </small>
+        </div>
+
+        <!-- Right: Student name + timer -->
+        <div class="exam-header-right">
+            <div class="exam-header-student">
+                <div class="s-name"><i class="bi bi-person-fill me-1" style="opacity:0.75;"></i>@ViewBag.StudentName</div>
+                <div class="s-label">Student</div>
+            </div>
+            <div class="timer-wrap">
+                <div class="timer-display" id="timer">--:--</div>
+                <div style="font-size:10px; opacity:0.75;">Time Remaining</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Subject Filter Bar -->
+    @{
+        var subjects = questions.Where(q => !string.IsNullOrEmpty(q.Subject)).Select(q => q.Subject!).Distinct().ToList();
+    }
+    @if (subjects.Count > 1)
+    {
+        <div class="bg-light border-bottom px-3 py-2 d-flex align-items-center gap-2 flex-wrap" id="subject-filter-bar">
+            <strong class="me-2">Subject:</strong>
+            <button type="button" class="btn btn-sm btn-primary subject-filter-btn active" data-subject="All">All (@questions.Count)</button>
+            @foreach (var subj in subjects)
+            {
+                var count = questions.Count(q => q.Subject == subj);
+                <button type="button" class="btn btn-sm btn-outline-primary subject-filter-btn" data-subject="@subj">@subj (@count)</button>
+            }
+        </div>
+    }
+
+    <div class="exam-body">
+        <div class="question-sidebar">
+            <div style="font-size:10px; font-weight:700; color:#888; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #dee2e6;">Questions</div>
+            <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:4px;">
+                @for (int i = 0; i < questions.Count; i++)
+                {
+                    <button type="button" class="btn btn-sm btn-outline-secondary nav-btn-item" id="nav-btn-@i"
+                            data-subject="@(questions[i].Subject ?? "")" onclick="ExamModule.showQuestion(@i)">
+                        @(i + 1)
+                    </button>
+                }
+            </div>
+            <div class="sidebar-legend">
+                <div style="font-size:10px; font-weight:700; color:#888; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:5px;">Legend</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#1a6fef;"></span> Current</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#198754;"></span> Answered</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#e67e00;"></span> Marked for Review</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#fff; border:1px solid #ced4da;"></span> Not Visited</div>
+            </div>
+        </div>
+
+        <div class="question-content">
+            @for (int i = 0; i < questions.Count; i++)
+            {
+                var q = questions[i];
+                <div class="question-panel" id="question-@i" data-question-id="@q.Id" data-subject="@(q.Subject ?? "")">
+                    <!-- Question meta bar: number + type/marks/subject badges -->
+                    <div class="question-meta">
+                        <span class="q-num">Question @(i + 1) <span style="font-weight:400;color:#6c757d;">of @questions.Count</span></span>
+                        <span class="badge bg-secondary">@q.QuestionType</span>
+                        <span class="badge bg-info">@q.Marks marks</span>
+                        @if (!string.IsNullOrEmpty(q.Subject))
+                        {
+                            <span class="badge bg-warning text-dark">@q.Subject</span>
+                        }
+                    </div>
+
+                    <!-- Question body: actual question text + image -->
+                    <div class="question-body">
+                    @if (!string.IsNullOrEmpty(q.QuestionText))
+                    {
+                        @Html.Raw(q.QuestionText)
+                    }
+
+                    @if (!string.IsNullOrEmpty(q.ImagePath))
+                    {
+                        <div class="mt-2">
+                            <img src="@q.ImagePath" alt="Question Image" class="img-fluid" style="max-height:300px;" />
+                        </div>
+                    }
+                    </div>
+
+                    @if (q.QuestionType == QuestionType.MCQ || q.QuestionType == QuestionType.MultiMCQ)
+                    {
+                        var isMulti = q.QuestionType == QuestionType.MultiMCQ;
+                        var sa = attempt.StudentAnswers?.FirstOrDefault(a => a.QuestionId == q.Id);
+                        var selectedIds = sa?.SelectedOptionId != null 
+                            ? new List<string> { sa.SelectedOptionId.Value.ToString() } 
+                            : sa?.AnswerText?.Split(',').Select(id => id.Trim()).ToList() ?? new List<string>();
+
+                        int optIdx = 0;
+                        @foreach (var opt in q.Options)
+                        {
+                            var posLabel = ((char)('A' + optIdx++)).ToString();
+                            var isChecked = selectedIds.Contains(opt.Id.ToString());
+                            <div class="option-item" onclick="if (event.target.tagName !== 'INPUT') { var inp = this.querySelector('input'); if (@(isMulti ? "true" : "false")) { inp.checked = !inp.checked; } else { inp.checked = true; } } ExamModule.updateSidebar();">
+                                <input type="@(isMulti ? "checkbox" : "radio")" name="answer-@i" value="@opt.Id" class="form-check-input me-2" @(isChecked ? "checked" : "") />
+                                <strong>@posLabel.</strong>
+                                @if (!string.IsNullOrEmpty(opt.OptionText))
+                                {
+                                    @Html.Raw(opt.OptionText)
+                                }
+                                @if (!string.IsNullOrEmpty(opt.ImagePath))
+                                {
+                                    <div class="mt-1">
+                                        <img src="@opt.ImagePath" alt="Option @opt.OptionLabel" class="img-fluid" style="max-height:150px;" />
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                    else if (q.QuestionType == QuestionType.TrueFalse)
+                    {
+                        var sa = attempt.StudentAnswers?.FirstOrDefault(a => a.QuestionId == q.Id);
+                        var isTrue = sa?.AnswerText == "True";
+                        var isFalse = sa?.AnswerText == "False";
+                        <div class="option-item" onclick="if (event.target.tagName !== 'INPUT') { this.querySelector('input').checked=true; } ExamModule.updateSidebar();">
+                            <input type="radio" name="answer-@i" value="True" class="form-check-input me-2" @(isTrue ? "checked" : "") /> True
+                        </div>
+                        <div class="option-item" onclick="if (event.target.tagName !== 'INPUT') { this.querySelector('input').checked=true; } ExamModule.updateSidebar();">
+                            <input type="radio" name="answer-@i" value="False" class="form-check-input me-2" @(isFalse ? "checked" : "") /> False
+                        </div>
+                    }
+                    else if (q.QuestionType == QuestionType.FillInTheBlank)
+                    {
+                        var sa = attempt.StudentAnswers?.FirstOrDefault(a => a.QuestionId == q.Id);
+                        <input type="text" class="form-control form-control-lg answer-input"
+                               placeholder="Type your answer here" value="@(sa?.AnswerText ?? "")" oninput="ExamModule.updateSidebar()" />
+                    }
+                    else if (q.QuestionType == QuestionType.Numerical)
+                    {
+                        var sa = attempt.StudentAnswers?.FirstOrDefault(a => a.QuestionId == q.Id);
+                        <input type="text" inputmode="decimal" class="form-control form-control-lg answer-input"
+                               placeholder="Enter the numerical answer (e.g. 7.5)" value="@(sa?.AnswerText ?? "")" oninput="ExamModule.updateSidebar()" />
+                    }
+                    else
+                    {
+                        var sa = attempt.StudentAnswers?.FirstOrDefault(a => a.QuestionId == q.Id);
+                        <textarea class="form-control answer-input" rows="6"
+                                  placeholder="Write your detailed answer here..." oninput="ExamModule.updateSidebar()">@(sa?.AnswerText ?? "")</textarea>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div id="back-warning" class="alert alert-danger text-center fw-bold position-fixed top-0 start-0 end-0" 
+         style="display:none; z-index:9999; margin:0; border-radius:0;">
+        ⚠️ You cannot go back during the exam. Please complete and submit your exam.
+    </div>
+
+    <div class="exam-footer">
+        <div class="d-flex align-items-center justify-content-between w-100 gap-2">
+            <!-- Left: nav + question counter -->
+            <div class="d-flex align-items-center gap-2" style="min-width:180px;">
+                <button class="btn-footer-nav" id="btn-prev" onclick="ExamModule.prevQuestion()" title="Previous question">
+                    <i class="bi bi-chevron-left"></i> PREV
+                </button>
+                <span style="font-size:12px; color:#888; white-space:nowrap;">
+                    Q <strong id="current-num">1</strong> / <span id="filtered-total">@questions.Count</span>
+                </span>
+            </div>
+
+            <!-- Center: action buttons -->
+            <div class="d-flex gap-2 flex-wrap justify-content-center">
+                <!-- Primary action: save & advance (solid green) -->
+                <button class="btn-footer btn-review" id="btn-save-next" onclick="ExamModule.saveAndNext()"
+                        title="Save answer and go to next question"
+                        style="background:#198754; border-color:#198754; color:#fff;">
+                    <i class="bi bi-check-circle-fill"></i> SAVE &amp; NEXT
+                </button>
+                <!-- Utility: clear (subtle outline) -->
+                <button class="btn-footer btn-footer-nav" id="btn-clear" onclick="ExamModule.clearAnswer()"
+                        title="Clear the current answer" style="color:#dc3545; border-color:#dc3545;">
+                    <i class="bi bi-x-circle"></i> CLEAR
+                </button>
+                <!-- Review: stay on question (outlined orange) -->
+                <button class="btn-footer btn-review-outline" id="btn-save-mark" onclick="ExamModule.saveAndMark()"
+                        title="Save answer and mark this question for review">
+                    <i class="bi bi-bookmark-fill"></i> SAVE &amp; MARK
+                </button>
+                <!-- Review: mark & advance (solid orange) -->
+                <button class="btn-footer btn-review" id="btn-mark-next" onclick="ExamModule.markAndNext()"
+                        title="Mark for review and go to next question">
+                    <i class="bi bi-bookmark-arrow-right-fill"></i> MARK &amp; NEXT
+                </button>
+            </div>
+
+            <!-- Right: next + submit -->
+            <div class="d-flex align-items-center gap-2" style="min-width:180px; justify-content:flex-end;">
+                <button class="btn-footer-nav" id="btn-next" onclick="ExamModule.nextQuestion()" title="Next question">
+                    NEXT <i class="bi bi-chevron-right"></i>
+                </button>
+                <button class="btn-footer-submit" onclick="ExamModule.confirmSubmit()" title="Submit the exam">
+                    <i class="bi bi-send-fill"></i> SUBMIT
+                </button>
+            </div>
+        </div>
+    </div>
+</div> <!-- /exam-container -->
+
+    <!-- Exam Summary Screen -->
+    <div id="exam-summary-screen" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: white; z-index: 2000; overflow-y: auto;">
+        <!-- Summary Header -->
+        <div style="background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%); color: white; padding: 30px 20px; text-align: center;">
+            <h1 style="margin: 0; font-size: 2.5rem; font-weight: 700;">Exam Summary</h1>
+        </div>
+
+        <!-- Summary Content -->
+        <div style="max-width: 1100px; margin: 40px auto; padding: 0 20px;">
+            <!-- Summary Table -->
+            <div style="background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden; margin-bottom: 40px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333; border-right: 1px solid #dee2e6;">No of Questions</th>
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333; border-right: 1px solid #dee2e6;">Answered</th>
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333; border-right: 1px solid #dee2e6;">Not Answered</th>
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333; border-right: 1px solid #dee2e6;">Marked for Review</th>
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333; border-right: 1px solid #dee2e6;">Answered & Marked for Review<br/><span style="font-size: 0.75rem; font-weight: 400;">(will be considered for evaluation)</span></th>
+                            <th style="padding: 20px; text-align: center; font-weight: 600; color: #333;">Not Visited</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom: 2px solid #dee2e6;">
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; border-right: 1px solid #dee2e6;" id="summary-total">0</td>
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; color: #198754; border-right: 1px solid #dee2e6;" id="summary-answered">0</td>
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; color: #dc3545; border-right: 1px solid #dee2e6;" id="summary-not-answered">0</td>
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; color: #ffc107; border-right: 1px solid #dee2e6;" id="summary-marked-only">0</td>
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; color: #0d6efd; border-right: 1px solid #dee2e6;" id="summary-answered-marked">0</td>
+                            <td style="padding: 25px; text-align: center; font-weight: 700; font-size: 1.1rem; color: #6c757d;" id="summary-not-visited">0</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Confirmation Section -->
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 40px; text-align: center; margin-bottom: 40px;">
+                <h3 style="margin: 0 0 15px 0; font-size: 1.3rem; font-weight: 700; color: #333;">Are you sure you want to submit for final marking?</h3>
+                <p style="margin: 0; font-size: 1rem; color: #666; font-weight: 500;">No changes will be allowed after submission.</p>
+            </div>
+
+            <!-- Action Buttons -->
+            <div style="display: flex; justify-content: center; gap: 20px; margin-bottom: 40px;">
+                <button type="button" class="btn btn-outline-secondary" onclick="ExamModule.closeSubmitDialog()" style="padding: 12px 40px; font-size: 1rem; font-weight: 600; min-width: 150px;">NO</button>
+                <button type="submit" form="submit-form" id="btn-final-submit"
+                        class="btn btn-primary"
+                        style="padding: 12px 40px; font-size: 1rem; font-weight: 600; min-width: 150px;"
+                        onclick="return onSubmitConfirmed(this);">
+                    YES
+                </button>
+            </div>
+        </div>
+    </div>
+
+<form id="submit-form" method="post" asp-controller="StudentExam" asp-action="Submit">
+    @Html.AntiForgeryToken()
+    <input type="hidden" name="attemptId" value="@attempt.Id" />
+</form>
+
+<script src="~/js/exam-timer.js" asp-append-version="true"></script>
+<script>
+    // Global popstate handler reference so it can be registered and removed
+    function popstateHandler() {
+        if (ExamModule.isSubmitting) return;
+        history.pushState({ examLock: true }, '', location.href);
+        var warn = document.getElementById('back-warning');
+        if (warn) {
+            warn.style.display = 'block';
+            clearTimeout(warn._hideTimer);
+            warn._hideTimer = setTimeout(function () { warn.style.display = 'none'; }, 3000);
+        }
+    }
+
+    // Called when the student confirms YES on the summary screen.
+    // Defined in global scope so the inline onclick can reach it.
+    function onSubmitConfirmed(btn) {
+        // Mark as submitting so the beforeunload guard allows navigation
+        ExamModule.isSubmitting = true;
+        clearInterval(ExamModule.timerInterval);
+        clearInterval(ExamModule.syncInterval);
+
+        // CRITICAL: Remove the popstate history-lock listener
+        window.removeEventListener('popstate', popstateHandler);
+
+        // Give visual feedback on the button after a 0ms deferral
+        // so that Chrome/Firefox do not cancel the form submission event.
+        setTimeout(function () {
+            btn.disabled = true;
+            btn.textContent = 'Submitting\u2026';
+        }, 0);
+
+        // Return true to allow the native type="submit" form submission to proceed
+        return true;
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        var questionIds = [@Html.Raw(string.Join(",", questions.Select(q => $"\"{q.Id}\"")))];
+        var questionSubjects = [@Html.Raw(string.Join(",", questions.Select(q => $"\"{q.Subject ?? ""}\"" )))];
+
+        ExamModule.init({
+            attemptId: '@attempt.Id',
+            timeRemaining: @attempt.TimeRemainingSeconds,
+            totalQuestions: @questions.Count,
+            questions: questionIds,
+            questionSubjects: questionSubjects,
+            existingAnswers: @Html.Raw(existingAnswersJson),
+            existingMarked: @Html.Raw(markedForReviewJson),
+            // Anti-forgery token (rendered by @@Html.AntiForgeryToken() in #submit-form),
+            // sent as a header on the JSON save/timer/tab-switch fetch calls.
+            antiForgeryToken: document.querySelector('#submit-form input[name="__RequestVerificationToken"]').value,
+            // Proctoring config (server is still authoritative on the auto-submit threshold).
+            proctoring: {
+                enabled: @(exam.EnableProctoring ? "true" : "false"),
+                requireFullscreen: @(exam.RequireFullscreen ? "true" : "false"),
+                maxWarnings: @exam.MaxProctoringWarnings
+            }
+        });
+
+        // Subject filter button click handler
+        document.querySelectorAll('.subject-filter-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var subject = this.getAttribute('data-subject');
+                ExamModule.filterBySubject(subject);
+            });
+        });
+
+        // Prevent browser back button — push multiple history entries as buffer
+        (function blockBack() {
+            history.pushState({ examLock: true }, '', location.href);
+            history.pushState({ examLock: true }, '', location.href);
+            history.pushState({ examLock: true }, '', location.href);
+
+            window.addEventListener('popstate', popstateHandler);
+        })();
+
+        // Warn before closing/refreshing the tab (skip if submitting)
+        window.addEventListener('beforeunload', function (e) {
+            if (ExamModule.isSubmitting) return;
+            e.preventDefault();
+            e.returnValue = '';
+        });
+
+        // If the browser restores this page from bfcache after the student submitted,
+        // the exam container is hidden (all questions display:none) = blank screen.
+        window.addEventListener('pageshow', function (e) {
+            if (e.persisted) {
+                window.location.replace('/StudentDashboard/Index');
+            }
+        });
+    });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        if (typeof renderMathInElement === "function") {
+            renderMathInElement(document.body, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '$', right: '$', display: false},
+                    {left: '\\(', right: '\\)', display: false},
+                    {left: '\\[', right: '\\]', display: true}
+                ],
+                throwOnError: false
+            });
+        }
+    });
+</script>
+</body>
+</html>
